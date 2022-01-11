@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"github.com/fatih/color"
 	"io"
+	"log"
 	"math"
 	"os"
 	"strings"
@@ -32,6 +34,32 @@ func ParseMatchSymbol(r rune) Match {
 		return GREY
 	}
 	return GREEN
+}
+
+func ReadTestGuesses(r io.Reader) []TestGuess {
+	s := bufio.NewScanner(r)
+	res := []TestGuess{}
+	for s.Scan() {
+		letters := s.Text()
+		if !s.Scan() {
+			break
+		}
+		matches := s.Text()
+		for len([]rune(matches)) < 5 {
+			matches += " "
+		}
+		rules := []Rule{}
+		for i := 0; i < 5; i++ {
+			r := Rule{
+				pos:    i,
+				letter: []rune(letters)[i],
+				match:  ParseMatchSymbol([]rune(matches)[i]),
+			}
+			rules = append(rules, r)
+		}
+		res = append(res, TestGuess{letters, rules})
+	}
+	return res
 }
 
 func ReadGuesses(r io.Reader) []Rule {
@@ -70,6 +98,13 @@ type Rule struct {
 	pos    int
 	letter rune
 	match  Match
+}
+
+type GuessRules []Rule
+
+type TestGuess struct {
+	word  string
+	rules GuessRules
 }
 
 func Reduce(words []string, rules []Rule) []string {
@@ -138,15 +173,109 @@ func CalcExpectedWordsRemaining(available []string, rules []Rule, w string) floa
 	return sum
 }
 
+// Answer
+// provides the wordle answer for guess against word
+// e.g. word=drink, guess=snare, returns:
+// {0, s, grey}, {1, n, yellow}, {2, a, grey}, {3, r, yellow}, {4, e, grey}
+func Answer(word, guess string) GuessRules {
+	freq := map[rune]int{}
+	res := []Rule{}
+	for i, r := range guess {
+		freq[r]++
+		res = append(res, Rule{
+			pos:    i,
+			letter: r,
+			match:  AnswerMatch(word, r, i, freq[r]),
+		})
+	}
+	return res
+}
+
+func AnswerMatch(word string, letter rune, pos, count int) Match {
+	if []rune(word)[pos] == letter {
+		return GREEN
+	}
+	// count runes for repeated letter determination
+	freq := map[rune]int{}
+	for _, r := range word {
+		freq[r]++
+	}
+	if strings.ContainsRune(word, letter) && freq[letter] >= count {
+		return YELLOW
+	}
+	return GREY
+}
+
+func EqualRules(a, b []Rule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, x := range a {
+		if x != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (r GuessRules) String() string {
+	bgGrey := color.New(color.BgHiBlack, color.Bold).SprintFunc()
+	bgYellow := color.New(color.FgHiWhite, color.BgHiYellow, color.Bold).SprintFunc()
+	bgGreen := color.New(color.FgHiWhite, color.BgHiGreen, color.Bold).SprintFunc()
+	s := ""
+	for _, c := range r {
+		var prFunc func(a ...interface{}) string
+		switch c.match {
+		case GREY:
+			prFunc = bgGrey
+		case YELLOW:
+			prFunc = bgYellow
+		case GREEN:
+			prFunc = bgGreen
+		}
+		s += fmt.Sprintf("%s", prFunc(string(c.letter)))
+	}
+	return s
+}
+
 func main() {
-	var listMatchWords, allWords bool
+	var (
+		listMatchWords, allWords bool
+		testWord                 string
+	)
 	flag.BoolVar(&listMatchWords, "l", false, "List all words that match the given rules")
 	flag.BoolVar(&allWords, "a", false, "Consider all words for best match")
+	flag.StringVar(&testWord, "t", "", "Test guesses against this answer and print wordle responses")
 	flag.Parse()
+
+	guessesFile := os.Stdin
+	guessesFilename := flag.Arg(0)
+	if guessesFilename != "" && guessesFilename != "-" {
+		var err error
+		guessesFile, err = os.Open(guessesFilename)
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}
+
+	if testWord != "" {
+		fail := 0
+		tests := ReadTestGuesses(guessesFile)
+		for _, t := range tests {
+			actual := Answer(testWord, t.word)
+			if EqualRules(actual, t.rules) {
+				fmt.Printf("%s OK %v\n", t.word, t.rules)
+			} else {
+				fmt.Printf("%s FAIL %v != %v\n", t.word, t.rules, actual)
+				fail = 1
+			}
+		}
+		os.Exit(fail)
+	}
 
 	f, _ := os.Open("words")
 	words := ReadWords(f)
-	rules := ReadGuesses(os.Stdin)
+	rules := ReadGuesses(guessesFile)
 	options := Reduce(words, nil)
 	if !allWords {
 		options = Reduce(words, rules)
