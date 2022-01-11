@@ -1,4 +1,4 @@
-# wordle-solve
+# wordle-solve (or YAWS Yet-Another-Wordle-Solver)
 
 ## Usage
 
